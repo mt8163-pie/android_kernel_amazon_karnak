@@ -38,9 +38,6 @@
 #include <mt-plat/battery_common.h>
 #include <mt-plat/charging.h>
 #include <mt-plat/mt_boot.h>
-#ifdef CONFIG_AMAZON_METRICS_LOG
-#include <linux/metricslog.h>
-#endif
 
 #if defined(CONFIG_MTK_PUMP_EXPRESS_PLUS_SUPPORT)
 #include <linux/mutex.h>
@@ -785,9 +782,6 @@ static bool is_aicl_allowed(void)
 
 static int ap15_charger_detection(void)
 {
-#ifdef CONFIG_AMAZON_METRICS_LOG
-	char buf[128] = {0};
-#endif
 
 	int iusb = g_temp_input_CC_value;
 	int current_max = 0;
@@ -833,13 +827,6 @@ static int ap15_charger_detection(void)
 					&g_temp_CC_value);
 	}
 
-#ifdef CONFIG_AMAZON_METRICS_LOG
-	snprintf(buf, sizeof(buf),
-			"%s:aicl:detected=%d;CT;1,aicl_result=%d;CT;1:NR",
-			__func__, BMT_status.ap15_charger_detected,
-			BMT_status.aicl_result / 100);
-	log_to_metrics(ANDROID_LOG_INFO, "AICL", buf);
-#endif
 
 exit:
 	return 0;

@@ -185,9 +185,6 @@ MODULE_DESCRIPTION("Display subsystem Driver");
 MODULE_LICENSE("GPL");
 #endif
 
-#ifdef CONFIG_AMAZON_METRICS_LOG
-#include <linux/metricslog.h>
-#endif
 
 /* ---------------------------------------------------
  *  Local Constants
@@ -3195,52 +3192,11 @@ static void lcm_init(void)
 
 static void lcm_suspend(void)
 {
-	#ifdef CONFIG_AMAZON_METRICS_LOG
-		char buf[128];
-		snprintf(buf, sizeof(buf), "%s:lcd:suspend=1;CT;1:NR", __func__);
-		log_to_metrics(ANDROID_LOG_INFO, "LCDEvent", buf);
-	#endif
-
-	#ifdef BUILD_LK
-		dprintf(INFO, "[LK/LCM] %s\n", __func__);
-	#else
-		pr_info("[jd936x] %s\n", __func__);
-	#endif
-
-	lcm_set_rst(0);
-
-	MDELAY(120);
 
 }
 
 static void lcm_resume(void)
 {
-	#ifdef CONFIG_AMAZON_METRICS_LOG
-		char buf[128];
-		snprintf(buf, sizeof(buf), "%s:lcd:resume=1;CT;1:NR", __func__);
-		log_to_metrics(ANDROID_LOG_INFO, "LCDEvent", buf);
-	#endif
-
-	#ifdef BUILD_LK
-		dprintf(INFO, "[LK/LCM] %s\n", __func__);
-	#else
-		pr_info("[jd936x] %s\n", __func__);
-	#endif
-
-	MDELAY(5);
-	lcm_reset();
-	get_lcm_id();
-
-	if(vendor_id == FITI_KD)
-		init_karnak_fiti_kd_lcm();
-	else if (vendor_id == FITI_INX)
-		init_karnak_fiti_inx_lcm();
-	else if (vendor_id == FITI_TXD)
-		init_karnak_fiti_txd_lcm();
-	else if (vendor_id == FITI_STARRY)
-		init_karnak_fiti_starry_lcm();
-	else
-		init_karnak_fiti_tpv_lcm(); /* TPV panel */
 
 }
 
