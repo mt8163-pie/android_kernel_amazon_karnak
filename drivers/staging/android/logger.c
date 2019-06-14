@@ -29,11 +29,17 @@
 #include <linux/time.h>
 #include <linux/vmalloc.h>
 #include <linux/aio.h>
+#include <linux/irq_work.h>
 #include "logger.h"
 
 #include <asm/ioctls.h>
 
+#ifdef CONFIG_AMAZON_METRICS_LOG
+#include <linux/metricslog.h>
 
+static int metrics_init;
+#define VITAL_ENTRY_MAX_PAYLOAD 512
+#endif
 
 static int s_fake_read;
 module_param_named(fake_read, s_fake_read, int, 0660);
@@ -65,12 +71,55 @@ struct logger_log {
 	struct miscdevice	misc;
 	wait_queue_head_t	wq;
 	struct list_head	readers;
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE
+	union {
+		struct mutex		mutex;
+		struct semaphore	sem;
+	};
+	int is_mutex;
+#else
+	struct mutex		mutex;
+#endif
 	size_t			w_off;
 	size_t			head;
 	size_t			size;
 	struct list_head	logs;
 };
 
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE
+#define logger_lock(log) \
+	do { \
+		if(log->is_mutex) \
+			mutex_lock(&log->mutex); \
+		else \
+			down(&log->sem); \
+	} while(0)
+
+#define logger_unlock(log) \
+	do { \
+		if(log->is_mutex) \
+			mutex_unlock(&log->mutex); \
+		else \
+			up(&log->sem); \
+	} while(0)
+
+#define init_logger_lock(log) \
+	do { \
+		if(log->is_mutex) \
+			mutex_init(&log->mutex); \
+		else \
+			sema_init(&log->sem, 1); \
+	} while(0)
+
+#else
+
+#define logger_lock(log) mutex_lock(&log->mutex)
+
+#define logger_unlock(log) mutex_unlock(&log->mutex);
+
+#define init_logger_lock(log) mutex_init(&log->mutex);
+
+#endif
 
 static LIST_HEAD(log_list);
 
@@ -625,6 +674,21 @@ static struct logger_log *get_log_from_minor(int minor)
 	return NULL;
 }
 
+/*
+#ifdef CONFIG_AMAZON_METRICS_LOG
+static struct logger_log *get_log_from_name(char* name)
+{
+    struct logger_log *log;
+    if (0 == name) {
+        return NULL;
+    }
+    list_for_each_entry(log, &log_list, logs)
+        if (0 == strcmp(log->misc.name, name))
+            return log;
+    return NULL;
+}
+#endif
+*/
 
 /*
  * logger_open - the log's open() file operation
@@ -921,7 +985,39 @@ static int __init create_log(char *log_name, int size)
 
 	init_waitqueue_head(&log->wq);
 	INIT_LIST_HEAD(&log->readers);
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE
+	log->is_mutex = strncmp(log_name, LOGGER_LOG_KERNEL, strlen(LOGGER_LOG_KERNEL));
+#endif
+	init_logger_lock(log);
+	log->w_off = 0;
+	log->head = 0;
+	log->size = size;
 
+	INIT_LIST_HEAD(&log->logs);
+	list_add_tail(&log->logs, &log_list);
+
+	/* finally, initialize the misc device for this log */
+	ret = misc_register(&log->misc);
+	if (unlikely(ret)) {
+		pr_err("failed to register misc device for log '%s'!\n",
+				log->misc.name);
+		goto out_free_log;
+	}
+
+	pr_info("created %luK log '%s'\n",
+		(unsigned long) log->size >> 10, log->misc.name);
+
+	return 0;
+
+out_free_log:
+	kfree(log);
+
+out_free_buffer:
+	vfree(buffer);
+	return ret;
+}
+
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE
 #define KERNEL_DOMAIN  "Kernel"
 #define ANDROID_LOG_INFO   (4)
 
@@ -933,7 +1029,46 @@ struct kmsg_write_priv {
 
 static struct logger_log *kmsg_log;
 
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE_DEBUG
+static long long kmsg_delayed_count;
+static ssize_t kmsg_delayed_count_show(struct kobject *kobj,
+				  struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lld\n", kmsg_delayed_count);
+}
+static struct kobj_attribute kmsg_delayed_count_attr =
+	__ATTR_RO(kmsg_delayed_count);
 
+static long long kmsg_failed_count;
+static ssize_t kmsg_failed_count_show(struct kobject *kobj,
+				  struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lld\n", kmsg_failed_count);
+}
+static struct kobj_attribute kmsg_failed_count_attr =
+	__ATTR_RO(kmsg_failed_count);
+
+static long long kmsg_total_count;
+static ssize_t kmsg_total_count_show(struct kobject *kobj,
+				  struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "%lld\n", kmsg_total_count);
+}
+static struct kobj_attribute kmsg_total_count_attr =
+	__ATTR_RO(kmsg_total_count);
+
+static struct attribute *kmsg_attrs[] = {
+	&kmsg_delayed_count_attr.attr,
+	&kmsg_total_count_attr.attr,
+	&kmsg_failed_count_attr.attr,
+	NULL
+};
+
+static struct attribute_group kmsg_attr_group = {
+	.name = "kmsg",
+	.attrs = kmsg_attrs,
+};
+#endif
 
 /* buffer for kernel log when it cannot get semphore */
 #define KERNEL_LOG_BUF_LEN (1 << CONFIG_LOG_BUF_SHIFT)
@@ -1207,7 +1342,44 @@ void logger_kmsg_write(const char *log_msg, size_t len)
 	/* null writes succeed, return zero */
 	if (unlikely(!header.len))
 		return;
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE_DEBUG
+	kmsg_total_count++;
+#endif
 
+	/*
+	 * We need to lock log->sem here, however, we can not call
+	 * down(&log->sem) directly, due to the following
+	 * function call sequence in console_unlock():
+	 *
+	 * -> raw_spin_lock_irqsave(&logbuf_lock, flags)
+	 * ...
+	 * -> raw_spin_unlock(&logbuf_lock)
+	 * ...
+	 * -> call_console_drivers()
+	 *    -> klog_console_write()
+	 *       -> logger_kmsg_write()
+	 * ...
+	 * -> local_irq_restore(flags)
+	 *
+	 * So if we call down(&log->sem) directly, might_sleep()
+	 * in down() will raise in_atomic() warnings, instead, we
+	 * call down_trylock() to avoid that, and if we fail locking it,
+	 * we write it to a ring buffer. We count
+	 * on the next call to logger_kmsg_write() would succeed on this
+	 * down_trylock() call, then we call logger_kmsg_drain_delayed()
+	 * to actually drain messages in the ring buffer.
+	 */
+	if (down_trylock(&log->sem)) {
+		int ret = logger_kmsg_drain(&header, log_msg, len);
+
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE_DEBUG
+		if (!ret) {
+			kmsg_failed_count++;
+		} else {
+			kmsg_delayed_count++;
+		}
+#endif
+		return;
 	}
 
 	/* drain the delayed messages (with log->sem locked) */
@@ -1250,7 +1422,54 @@ static int __init logger_init(void)
 {
 	int ret;
 
+#ifndef CONFIG_AMAZON_LOGD
+	ret = create_log(LOGGER_LOG_MAIN, __MAIN_BUF_SIZE);
+	if (unlikely(ret))
+		goto out;
 
+	ret = create_log(LOGGER_LOG_EVENTS, __EVENTS_BUF_SIZE);
+	if (unlikely(ret))
+		goto out;
+
+	ret = create_log(LOGGER_LOG_RADIO, __RADIO_BUF_SIZE);
+	if (unlikely(ret))
+		goto out;
+
+	ret = create_log(LOGGER_LOG_SYSTEM, __SYSTEM_BUF_SIZE);
+	if (unlikely(ret))
+		goto out;
+#endif /* CONFIG_AMAZON_LOGD */
+
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE
+	ret = create_log(LOGGER_LOG_KERNEL, __KERNEL_BUF_SIZE);
+	if (unlikely(ret))
+		goto out;
+#ifdef CONFIG_AMAZON_KLOG_CONSOLE_DEBUG
+	ret = sysfs_create_group(kernel_kobj, &kmsg_attr_group);
+	if (ret)
+		goto out;
+#endif
+#endif
+
+#ifdef CONFIG_AMAZON_METRICS_LOG
+	ret = create_log(LOGGER_LOG_METRICS, __METRICS_BUF_SIZE);
+	if (unlikely(ret))
+		goto out;
+
+	metrics_init = 1;
+#endif
+
+#ifdef CONFIG_AMAZON_LOG
+#ifndef CONFIG_AMAZON_LOGD
+    ret = create_log(LOGGER_LOG_AMAZON_MAIN, 256*1024);
+    if (unlikely(ret))
+        goto out;
+#endif /* CONFIG_AMAZON_LOGD */
+
+	ret = create_log(LOGGER_LOG_AMAZON_VITALS, __VITALS_BUF_SIZE);
+	if (unlikely(ret))
+		goto out;
+#endif
 out:
 	return ret;
 }

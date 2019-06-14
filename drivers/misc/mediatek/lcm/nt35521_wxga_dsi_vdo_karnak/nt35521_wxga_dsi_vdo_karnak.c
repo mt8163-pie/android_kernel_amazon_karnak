@@ -189,6 +189,9 @@ MODULE_LICENSE("GPL");
 
 #endif
 
+#ifdef CONFIG_AMAZON_METRICS_LOG
+#include <linux/metricslog.h>
+#endif
 
 /* ---------------------------------------------------
  *  Local Constants
@@ -1081,6 +1084,11 @@ static void lcm_suspend(void)
 {
 	unsigned int data_array[16];
 
+	#ifdef CONFIG_AMAZON_METRICS_LOG
+		char buf[128];
+		snprintf(buf, sizeof(buf), "%s:lcd:suspend=1;CT;1:NR", __func__);
+		log_to_metrics(ANDROID_LOG_INFO, "LCDEvent", buf);
+	#endif
 
 	#ifdef BUILD_LK
 		dprintf(INFO, "[LK/LCM] %s\n", __func__);
@@ -1100,6 +1108,11 @@ static void lcm_suspend(void)
 
 static void lcm_resume(void)
 {
+	#ifdef CONFIG_AMAZON_METRICS_LOG
+		char buf[128];
+		snprintf(buf, sizeof(buf), "%s:lcd:resume=1;CT;1:NR", __func__);
+		log_to_metrics(ANDROID_LOG_INFO, "LCDEvent", buf);
+	#endif
 
 	#ifdef BUILD_LK
 		dprintf(INFO, "[LK/LCM] %s\n", __func__);

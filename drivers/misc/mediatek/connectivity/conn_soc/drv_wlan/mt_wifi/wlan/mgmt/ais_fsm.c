@@ -1066,7 +1066,7 @@ VOID aisInitializeConnectionSettings(IN P_ADAPTER_T prAdapter, IN P_REG_INFO_T p
 	/* Setup default values for operation */
 	COPY_MAC_ADDR(prConnSettings->aucMacAddress, aucZeroMacAddr);
 
-	if (kalStrnCmp(CONFIG_ARCH_MTK_PROJECT, "biscuit", 7) == 0 ||
+	if (kalStrnCmp(CONFIG_ARCH_MTK_PROJECT, "abh123", 7) == 0 ||
 		kalStrnCmp(CONFIG_ARCH_MTK_PROJECT, "cookie", 6) == 0 ||
 		kalStrnCmp(CONFIG_ARCH_MTK_PROJECT, "radar", 5) == 0)
 		ucDelayDisconnectTime =
@@ -3456,6 +3456,11 @@ VOID aisUpdateBssInfoForJOIN(IN P_ADAPTER_T prAdapter, P_STA_RECORD_T prStaRec, 
 	prAisBssInfo->u2ATIMWindow = 0;
 
 	prAisBssInfo->ucBeaconTimeoutCount = AIS_BEACON_TIMEOUT_COUNT_INFRA;
+#if CFG_SUPPORT_ROAMING_SKIP_ONE_AP
+	prAisBssInfo->ucRoamSkipTimes = ROAMING_ONE_AP_SKIP_TIMES_INITIAL;
+	prAisBssInfo->fgGoodRcpiArea = FALSE;
+	prAisBssInfo->fgPoorRcpiArea = FALSE;
+#endif
 
 	/* 4 <4.2> Update HT information and set channel */
 	/* Record HT related parameters in rStaRec and rBssInfo
