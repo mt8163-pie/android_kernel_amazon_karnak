@@ -4,7 +4,7 @@
 #include <linux/percpu.h>
 #include <linux/smp.h>
 #include <asm/fiq_smp_call.h>
-#include <mach/irqs.h>
+/* #include <mach/irqs.h> */
 
 #if defined(CONFIG_FIQ_GLUE)
 

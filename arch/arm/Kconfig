@@ -212,8 +212,8 @@ config ARCH_HAS_DMA_SET_COHERENT_MASK
 config GENERIC_ISA_DMA
 	bool
 
-config FIQ
-	bool
+#config FIQ
+#	def_bool n
 
 config NEED_RET_TO_USER
 	bool
