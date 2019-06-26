@@ -34,7 +34,9 @@
 #include <sound/soc-dapm.h>
 #include <sound/initval.h>
 #include <sound/tlv.h>
+#ifdef CONFIG_AMAZON_METRICS_LOG
 #include  <linux/metricslog.h> //-- add include file for metrics logging through logcat_vital-->KDM
+#endif
 
 #include "rt551x-spi.h"
 #include "rt551x.h"
@@ -488,14 +490,14 @@ static int rt551x_spi_pcm_probe(struct snd_soc_platform *platform)
 	init_waitqueue_head(&rt551x_dsp->wait);
 	snd_soc_platform_set_drvdata(platform, rt551x_dsp);
 	rt551x_dsp_pointer = rt551x_dsp;
+	rt551x_spi->dev.platform_data = rt551x_dsp;
 
 	return 0;
 }
-
-static int rt551x_spi_suspend(struct snd_soc_dai *dai)
+#ifdef CONFIG_PM_SLEEP
+static int rt551x_spi_suspend(struct device *dev)
 {
-	struct snd_soc_platform *platform = dai->platform;
-	struct rt551x_dsp *rt551x_dsp =  snd_soc_platform_get_drvdata(platform);
+	struct rt551x_dsp *rt551x_dsp = dev_get_platdata(dev);
 	dev_info(rt551x_dsp->dev, "voice_dsp rt551x_spi_suspend called");
 	mutex_lock(&rt551x_dsp->dma_lock);
 	rt551x_dsp->had_suspend = 1;
@@ -504,10 +506,9 @@ static int rt551x_spi_suspend(struct snd_soc_dai *dai)
 	return 0;
 }
 
-static int rt551x_spi_resume(struct snd_soc_dai *dai)
+static int rt551x_spi_resume(struct device *dev)
 {
-	struct snd_soc_platform *platform = dai->platform;
-	struct rt551x_dsp *rt551x_dsp =  snd_soc_platform_get_drvdata(platform);
+	struct rt551x_dsp *rt551x_dsp = dev_get_platdata(dev);
 	dev_info(rt551x_dsp->dev, "voice_dsp rt551x_spi_resume called");
 	mutex_lock(&rt551x_dsp->dma_lock);
 	rt551x_dsp->had_suspend = 0;
@@ -515,12 +516,10 @@ static int rt551x_spi_resume(struct snd_soc_dai *dai)
 	wake_up(&rt551x_dsp->wait);
 	return 0;
 }
-
+#endif
 static struct snd_soc_platform_driver rt551x_spi_platform = {
 	.probe = rt551x_spi_pcm_probe,
 	.ops = &rt551x_spi_pcm_ops,
-	.suspend = rt551x_spi_suspend,
-	.resume = rt551x_spi_resume,
 };
 
 static const struct snd_soc_component_driver rt551x_spi_dai_component = {
@@ -764,11 +763,12 @@ static const struct of_device_id rt551x_of_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, rt551x_of_match);
-
+static SIMPLE_DEV_PM_OPS(rt551x_spi_pm_ops, rt551x_spi_suspend, rt551x_spi_resume);
 static struct spi_driver rt551x_spi_driver = {
 	.driver = {
 		.name = "rt551x",
 		.of_match_table = of_match_ptr(rt551x_of_match),
+		.pm = &rt551x_spi_pm_ops,
 	},
 	.probe = rt551x_spi_probe,
 	.remove = rt551x_spi_remove,
